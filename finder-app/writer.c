@@ -7,6 +7,7 @@ int main(int argc, char *argv[]) {
     
     if (argc != 3) {
         syslog(LOG_ERR, "Number of argument of must be 2. Ex: %s writefile writestring", argv[0]);
+        closelog();
         return 1;
     }
     
@@ -16,11 +17,13 @@ int main(int argc, char *argv[]) {
     FILE *fptr = fopen(writefile, "w");
     if (fptr == NULL) {
         syslog(LOG_ERR, "Error to opening file %s", writefile);
+        closelog();
         return 1;
     }
     else {
         fputs(writestr, fptr);
         syslog(LOG_DEBUG, "Write %s to %s", writestr, writefile);
+        closelog();
         return 0;
     }
 }
