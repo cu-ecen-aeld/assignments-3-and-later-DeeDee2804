@@ -9,13 +9,16 @@
 */
 bool do_system(const char *cmd)
 {
-
+    int ret;
 /*
  * TODO  add your code here
  *  Call the system() function with the command set in the cmd
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    ret = system(cmd);
+
+    if (ret != 0) return false;
 
     return true;
 }
@@ -47,7 +50,7 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count];
 
 /*
  * TODO:
@@ -58,10 +61,25 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid_t pid;
+    int child_sts;
+    
+    pid = fork();
+    if (pid == -1) {
+        return false;
+    } else if (pid == 0) {
+        execv(command[0], command);
+        abort();
+    } 
+
+    if (waitpid(pid, &child_sts, 0) == -1){
+        return false;
+    } else if (WIFEXITED(child_sts))
+        return WEXITSTATUS(child_sts) == 0;
 
     va_end(args);
 
-    return true;
+    return false;
 }
 
 /**
@@ -80,10 +98,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
 
 /*
  * TODO
@@ -92,8 +106,31 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    pid_t pid;
+    int child_sts;
+
+    int fd = open(outputfile, O_RDWR|O_CREAT, 0644);
+    if (fd < 0) return false;
+
+    pid = fork();
+
+    if (pid == -1) {
+        close(fd);
+        return false;
+    } else if (pid == 0) {
+        if (dup2(fd, 1) < 0) return false;
+        close(fd);
+        execv(command[0], command);
+        abort();
+    }
+
+    close(fd);
+    if (waitpid(pid, &child_sts, 0) == -1)
+        return false;
+    else if (WIFEXITED(child_sts))
+        return WEXITSTATUS(child_sts) == 0;
 
     va_end(args);
 
-    return true;
+    return false;
 }
