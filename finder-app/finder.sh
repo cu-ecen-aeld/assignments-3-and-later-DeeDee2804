@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Implement for the assignment 1
 # Looking for times of search string appears in the specific directory
 

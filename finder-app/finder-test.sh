@@ -32,9 +32,9 @@ echo "Writing ${NUMFILES} files containing string ${WRITESTR} to ${WRITEDIR}"
 rm -rf "${WRITEDIR}"
 
 # create $WRITEDIR if not assignment1
-assignment=`cat ../conf/assignment.txt`
+assignment=`cat conf/assignment.txt`
 
-if [ $assignment = 'assignment2' ]
+if [ $assignment = 'assignment3' ]
 then
 	mkdir -p "$WRITEDIR"
 
@@ -49,8 +49,6 @@ then
 	fi
 fi
 #echo "Removing the old writer utility and compiling as a native application"
-make clean
-make
 
 for i in $( seq 1 $NUMFILES)
 do
