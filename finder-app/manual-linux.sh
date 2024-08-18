@@ -93,17 +93,17 @@ ${CROSS_COMPILE}readelf -a "${OUTDIR}/rootfs/bin/busybox" | grep "program interp
 ${CROSS_COMPILE}readelf -a "${OUTDIR}/rootfs/bin/busybox" | grep "Shared library"
 
 # Add library dependencies to rootfs
-# slink "${OUTDIR}/rootfs/lib/ld-linux-aarch64.so.1"
+export SYSROOT=$(${CROSS_COMPILE}gcc -print-sysroot)
 cd "${OUTDIR}/rootfs/lib/"
-cp "/home/deedee2804/Downloads/arm-cross-compiler/aarch64-none-linux-gnu/libc/lib64/ld-2.33.so" "${OUTDIR}/rootfs/lib"
+cp "${SYSROOT}/lib64/ld-2.33.so" "${OUTDIR}/rootfs/lib"
 ln ld-2.33.so ld-linux-aarch64.so.1
 cd "${OUTDIR}/rootfs/lib64/"
 # cp "/home/deedee2804/Downloads/arm-cross-compiler/aarch64-none-linux-gnu/libc/lib64/libm-2.33.so" "${OUTDIR}/rootfs/lib64"
-cp "/home/deedee2804/Downloads/arm-cross-compiler/aarch64-none-linux-gnu/libc/lib64/libm.so.6" "${OUTDIR}/rootfs/lib64"
+cp "${SYSROOT}/lib64/libm.so.6" "${OUTDIR}/rootfs/lib64"
 # ln libm-2.33.so libm.so.6
-cp "/home/deedee2804/Downloads/arm-cross-compiler/aarch64-none-linux-gnu/libc/lib64/libresolv.so.2" "${OUTDIR}/rootfs/lib64"
+cp "${SYSROOT}/lib64/libresolv.so.2" "${OUTDIR}/rootfs/lib64"
 # ln libresolv-2.33.so libresolv.so.2
-cp "/home/deedee2804/Downloads/arm-cross-compiler/aarch64-none-linux-gnu/libc/lib64/libc.so.6" "${OUTDIR}/rootfs/lib64"
+cp "${SYSROOT}/lib64/libc.so.6" "${OUTDIR}/rootfs/lib64"
 # ln libc-2.33.so libc.so.6
 
 # Make device nodes
