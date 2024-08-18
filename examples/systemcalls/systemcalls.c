@@ -69,7 +69,7 @@ bool do_exec(int count, ...)
         return false;
     } else if (pid == 0) {
         execv(command[0], command);
-        abort();
+        exit(1);
     } 
 
     if (waitpid(pid, &child_sts, 0) == -1){
@@ -121,7 +121,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         if (dup2(fd, 1) < 0) return false;
         close(fd);
         execv(command[0], command);
-        abort();
+        exit(1);
     }
 
     close(fd);
