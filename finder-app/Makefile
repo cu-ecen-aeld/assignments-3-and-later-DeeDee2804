@@ -1,13 +1,20 @@
-CROSS_COMPILE=aarch64-none-linux-gnu-gcc
+# Default compiler and compiler flags
+CC := gcc
+CF := -Wall
+# If Cross Compiler provided as argument
+ifdef CROSS_COMPILE
+	CC := $(CROSS_COMPILE)gcc
+endif
+# Executable
+OUTPUT := writer
 
-hostmake: writer.c
-	gcc -o  writer writer.c
+# Default Target
+$(OUTPUT): writer.o
+	$(CC) $(CF) writer.o -o $(OUTPUT)
+writer.o: writer.c
+	$(CC) $(CF) -c writer.c
+
+all: $(OUTPUT)
 
 clean:
-	rm -f writer
-
-arm-make:
-	$(CROSS_COMPILE) -o writer writer.c
-
-all:
-	$(CROSS_COMPILE) -o writer writer.c
+	rm -f *.o $(OUTPUT)
