@@ -8,3 +8,6 @@ clean:
 
 arm-make:
 	$(CROSS_COMPILE) -o writer writer.c
+
+all:
+	$(CROSS_COMPILE) -o writer writer.c
