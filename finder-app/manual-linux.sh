@@ -115,7 +115,7 @@ sudo mknod -m 666 dev/console c 5 1
 echo "Clean and build the writer ultility"
 cd "${FINDER_APP_DIR}"
 make clean
-make CROSS_COMPILE all
+make CROSS_COMPILE=aarch64-none-linux-gnu- all
 
 # Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
