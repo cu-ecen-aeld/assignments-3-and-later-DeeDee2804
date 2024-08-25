@@ -1,0 +1,20 @@
+#!/bin/sh
+# Using as a startup script that using start-stop-daemon to start aesdsocket application
+
+DAEMON=aesdsocket
+
+case "$1" in 
+    start)
+        echo "Starting aesd socket server"
+        start-stop-daemon -S -n aesdsocket -a ${DAEMON} -- -d
+        ;;
+    stop)
+        echo "Stopping aesd socket server"
+        start-stop-daemon -K -n aesdsocket
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+esac
+
+exit 0
