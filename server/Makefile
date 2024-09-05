@@ -10,7 +10,7 @@ OUTPUT := aesdsocket
 
 # Default Target
 $(OUTPUT): aesdsocket.o
-	$(CC) $(CF) aesdsocket.o -o $(OUTPUT)
+	$(CC) $(CF) aesdsocket.o -o $(OUTPUT) -lpthread
 aesdsocket.o: aesdsocket.c
 	$(CC) $(CF) -c aesdsocket.c
 

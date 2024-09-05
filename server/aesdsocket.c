@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <pthread.h>
+#include <sys/queue.h>
 
 #define MYPORT "9000"
 #define BACKLOG 10
@@ -19,8 +21,23 @@
 #define MAX_BUFFER_SIZE 100
 
 int sockfd = -1;
-int accepted_sockfd = -1;
+pthread_mutex_t file_mutex;
 FILE* fptr = NULL;
+
+SLIST_HEAD(slist_head, slist_data_s) head = SLIST_HEAD_INITIALIZER(head);
+struct slisthead *headp;
+
+struct connection_data_s {
+    int socket_id;
+    bool is_done;
+    pthread_t thread_id;
+    const char* client_addr;
+};
+
+struct slist_data_s {
+    struct connection_data_s* connection;
+    SLIST_ENTRY(slist_data_s) entries;
+};
 
 /**
  * @brief Get the right socket address struct based on socket family
@@ -41,8 +58,15 @@ void *get_in_addr(struct sockaddr *sa)
 void clean_and_exit(int status) {
     if (fptr != NULL) fclose(fptr);
     if (sockfd != -1) close(sockfd);
-    if (accepted_sockfd != -1) close(accepted_sockfd);
-    remove(DATA_STREAM);
+    pthread_mutex_destroy(&file_mutex);
+    while (SLIST_EMPTY(&head)) {
+        struct slist_data_s* tmp = SLIST_FIRST(&head);
+        SLIST_REMOVE_HEAD(&head, entries);
+        close(tmp->connection->socket_id);
+        pthread_join(tmp->connection->thread_id, NULL);
+        free(tmp->connection);
+        free(tmp);
+    }
     closelog();
     exit(status);
 }
@@ -52,9 +76,14 @@ void clean_and_exit(int status) {
  * Open the data path file and append data from client to setup socket
  * Then send back all the data has received up to now from data file back to the client
 */
-void handle_client_connection(void) {
+void * handle_client_connection(void * accpeted_sock_params) {
     char stream_buf[MAX_BUFFER_SIZE];
+    struct connection_data_s * accepted_sock = (struct connection_data_s *) accpeted_sock_params;
+    
+    // Logging accept client connection success
+    syslog(LOG_INFO, "Accepted connection from %s\n", accepted_sock->client_addr);
 
+    pthread_mutex_lock(&file_mutex);
     fptr = fopen(DATA_STREAM, "a");
     if (fptr == NULL) {
         syslog(LOG_ERR, "Error to opening file %s", DATA_STREAM);
@@ -65,7 +94,7 @@ void handle_client_connection(void) {
     // packet data to file DATA_STREAM with newline character
     while(1) {
         ssize_t numbytes;
-        if ((numbytes = recv(accepted_sockfd, stream_buf, MAX_BUFFER_SIZE-1, 0)) == -1)
+        if ((numbytes = recv(accepted_sock->socket_id, stream_buf, MAX_BUFFER_SIZE-1, 0)) == -1)
         {
             syslog(LOG_ERR, "Error while receiving data %m");
             clean_and_exit(EXIT_FAILURE);
@@ -82,17 +111,27 @@ void handle_client_connection(void) {
         if (stream_buf[numbytes-1] =='\n') break;
     }
     fclose(fptr);
-    
+    pthread_mutex_unlock(&file_mutex);
+
     // Returns the full content of DATA_STREAM to the client as soon as
     // client complete sending packets
+    pthread_mutex_lock(&file_mutex);
     fptr = fopen(DATA_STREAM, "r");
     while(fgets(stream_buf, MAX_BUFFER_SIZE, fptr) !=  NULL) {
-        if (send(accepted_sockfd, stream_buf, strlen(stream_buf), 0) == -1) {
+        if (send(accepted_sock->socket_id, stream_buf, strlen(stream_buf), 0) == -1) {
             syslog(LOG_ERR, "Error while sending data");
             clean_and_exit(EXIT_FAILURE);
         }
     }
     fclose(fptr);
+    pthread_mutex_unlock(&file_mutex);
+
+    // Logging close client connection success
+    close(accepted_sock->socket_id);
+    syslog(LOG_INFO, "Closed connection from %s\n", accepted_sock->client_addr);
+    accepted_sock->is_done = true;
+    fptr = NULL;
+    return NULL;
 }
 
 /**
@@ -162,7 +201,7 @@ void run_daemon(void) {
 int main(int argc, char *argv[]) {
     // Start logging
     openlog(NULL, 0, LOG_USER);
-
+    remove(DATA_STREAM);
     // Set up signal handling
     struct sigaction sa;
     memset(&sa, 0, sizeof(struct sigaction));
@@ -224,28 +263,53 @@ int main(int argc, char *argv[]) {
         clean_and_exit(EXIT_FAILURE);
     }
 
+    // Initialize the mutex lock
+    pthread_mutex_init(&file_mutex, NULL);
+
     // Main loop to accept and handle client connections
     while (1) {
         struct sockaddr_storage their_addr;
         socklen_t addr_size = sizeof(their_addr);
         char ipstr[INET6_ADDRSTRLEN];
 
-        accepted_sockfd = accept(sockfd, (struct sockaddr *) &their_addr, &addr_size);
+        int accepted_sockfd = accept(sockfd, (struct sockaddr *) &their_addr, &addr_size);
         if (accepted_sockfd == -1) {
             syslog(LOG_ERR, "Error while accept the socket: %m");
             clean_and_exit(EXIT_FAILURE);
         }
-        
-        // Logging client connection success
+
         const char* client_addr =  inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), ipstr, sizeof ipstr);
-        syslog(LOG_INFO, "Accepted connection from %s\n", client_addr);
 
-        handle_client_connection();
 
-        close(accepted_sockfd);
-        syslog(LOG_INFO, "Closed connection from %s\n", client_addr);
+        // TODO: Create new thread for each accepted socket
+        struct slist_data_s* thread_item = (struct slist_data_s*) malloc(sizeof(struct slist_data_s));
+        thread_item->connection = (struct connection_data_s*) malloc(sizeof(struct connection_data_s));
+        thread_item->connection->client_addr = client_addr;
+        thread_item->connection->socket_id = accepted_sockfd;
+        thread_item->connection->is_done = false;
+        pthread_create(&thread_item->connection->thread_id, NULL, handle_client_connection, (void *) thread_item->connection);
         
-        fptr = NULL;
+        SLIST_INSERT_HEAD(&head, thread_item, entries);
+        struct slist_data_s *current = SLIST_FIRST(&head);
+        struct slist_data_s *prev = NULL;
+        while (current != NULL) {
+            struct slist_data_s *next = SLIST_NEXT(current, entries);
+            if (current->connection->is_done) {
+                if (prev == NULL) {
+                    SLIST_REMOVE_HEAD(&head, entries);
+                } else {
+                    SLIST_NEXT(prev, entries) = next;
+                }
+                
+                pthread_join(current->connection->thread_id, NULL);
+                free(current->connection);
+                free(current);
+            } else {
+                prev = current;
+            }
+            current = next;
+        }
+        // handle_client_connection((void*) accepted_sock);
     }
     clean_and_exit(EXIT_SUCCESS);
 }
