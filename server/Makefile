@@ -1,20 +1,16 @@
 # Default compiler and compiler flags
-CC := gcc
-CF := -Wall -Werror
-# If Cross Compiler provided as argument
-ifdef CROSS_COMPILE
-	CC := $(CROSS_COMPILE)gcc
-endif
-# Executable
-OUTPUT := aesdsocket
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -g -Wall -Werror
+TARGET ?= aesdsocket
+LDFLAGS ?= -lpthread -lrt
 
 # Default Target
-$(OUTPUT): aesdsocket.o
-	$(CC) $(CF) aesdsocket.o -o $(OUTPUT) -lpthread
+$(TARGET): aesdsocket.o
+	$(CC) $(CFLAGS) aesdsocket.o -o $(TARGET) $(LDFLAGS)
 aesdsocket.o: aesdsocket.c
-	$(CC) $(CF) -c aesdsocket.c
+	$(CC) $(CFLAGS) -c aesdsocket.c
 
-all: $(OUTPUT)
+all: $(TARGET)
 
 clean:
-	rm -f *.o $(OUTPUT)
+	rm -f *.o $(TARGET)
