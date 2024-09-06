@@ -14,15 +14,19 @@
 #include <sys/stat.h>
 #include <pthread.h>
 #include <sys/queue.h>
+#include <time.h>
 
 #define MYPORT "9000"
 #define BACKLOG 10
 #define DATA_STREAM "/var/tmp/aesdsocketdata"
 #define MAX_BUFFER_SIZE 100
+#define ELAPSED_TIME 10
+#define TIME_STR_LEN 100
 
 int sockfd = -1;
-pthread_mutex_t file_mutex;
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 FILE* fptr = NULL;
+volatile bool stop_threads = false;
 
 SLIST_HEAD(slist_head, slist_data_s) head = SLIST_HEAD_INITIALIZER(head);
 struct slisthead *headp;
@@ -72,13 +76,43 @@ void clean_and_exit(int status) {
 }
 
 /**
+ * @brief Handle timer when the elapsed
+ * Open the data path file and append a timestamp followed by a newline
+ * The timer use the mutex to ensure the timestamp is written atomically with respect to socket data
+*/
+void * handle_timer(void* thread_params) {
+    while(!stop_threads) {
+        sleep(ELAPSED_TIME);
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        char timestamp[TIME_STR_LEN];
+        strftime(timestamp, sizeof(timestamp), "%a, %d %b %Y %H:%M:%S %z", tm_info);
+        printf("Generated timestamp: %s\n", timestamp);
+        pthread_mutex_lock(&file_mutex);
+        fptr = fopen(DATA_STREAM, "a");
+        
+        if (fptr == NULL) {
+            syslog(LOG_ERR, "Error to opening file %s", DATA_STREAM);
+            clean_and_exit(EXIT_FAILURE);
+        }
+        // Write the timestamp with the correct format to data path file
+        fprintf(fptr, "timestamp:%s\n", timestamp);
+        fclose(fptr);
+        pthread_mutex_unlock(&file_mutex);
+    }
+    struct connection_data_s * threads_arg = (struct connection_data_s *) thread_params;
+    threads_arg->is_done = true;
+    fptr = NULL;
+    return NULL;
+}
+/**
  * @brief Handle connection when client connect and send data to setup socket
  * Open the data path file and append data from client to setup socket
  * Then send back all the data has received up to now from data file back to the client
 */
-void * handle_client_connection(void * accpeted_sock_params) {
+void * handle_client_connection(void * thread_params) {
     char stream_buf[MAX_BUFFER_SIZE];
-    struct connection_data_s * accepted_sock = (struct connection_data_s *) accpeted_sock_params;
+    struct connection_data_s * accepted_sock = (struct connection_data_s *) thread_params;
     
     // Logging accept client connection success
     syslog(LOG_INFO, "Accepted connection from %s\n", accepted_sock->client_addr);
@@ -92,7 +126,7 @@ void * handle_client_connection(void * accpeted_sock_params) {
 
     // Receive data over connection from client and appends
     // packet data to file DATA_STREAM with newline character
-    while(1) {
+    while(!stop_threads) {
         ssize_t numbytes;
         if ((numbytes = recv(accepted_sock->socket_id, stream_buf, MAX_BUFFER_SIZE-1, 0)) == -1)
         {
@@ -111,13 +145,11 @@ void * handle_client_connection(void * accpeted_sock_params) {
         if (stream_buf[numbytes-1] =='\n') break;
     }
     fclose(fptr);
-    pthread_mutex_unlock(&file_mutex);
 
     // Returns the full content of DATA_STREAM to the client as soon as
     // client complete sending packets
-    pthread_mutex_lock(&file_mutex);
     fptr = fopen(DATA_STREAM, "r");
-    while(fgets(stream_buf, MAX_BUFFER_SIZE, fptr) !=  NULL) {
+    while((fgets(stream_buf, MAX_BUFFER_SIZE, fptr) !=  NULL) && (!stop_threads)) {
         if (send(accepted_sock->socket_id, stream_buf, strlen(stream_buf), 0) == -1) {
             syslog(LOG_ERR, "Error while sending data");
             clean_and_exit(EXIT_FAILURE);
@@ -139,6 +171,7 @@ void * handle_client_connection(void * accpeted_sock_params) {
 */
 static void signal_handler(int signo) {
     syslog(LOG_INFO, "Caught signal %d, exiting", signo);
+    stop_threads = true;
     clean_and_exit(EXIT_SUCCESS);
 }
 
@@ -202,6 +235,7 @@ int main(int argc, char *argv[]) {
     // Start logging
     openlog(NULL, 0, LOG_USER);
     remove(DATA_STREAM);
+
     // Set up signal handling
     struct sigaction sa;
     memset(&sa, 0, sizeof(struct sigaction));
@@ -213,14 +247,16 @@ int main(int argc, char *argv[]) {
         clean_and_exit(EXIT_FAILURE);
     }
 
+    // Proccessing the program terminal input that enabling daemon mode
     bool is_daemon = false;
     if ((argc > 1) && (strcmp(argv[1], "-d") == 0)) {
         syslog(LOG_INFO, "Running as daemon");
         is_daemon = true;
     }
-    
-    struct addrinfo hints;
+
+    // Initialize the socket setup
     struct addrinfo *servinfo;
+    struct addrinfo hints;
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -238,7 +274,7 @@ int main(int argc, char *argv[]) {
         freeaddrinfo(servinfo);
         clean_and_exit(EXIT_FAILURE);
     }
-
+    
     int optval = 1;
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) != 0)
     {
@@ -247,6 +283,7 @@ int main(int argc, char *argv[]) {
         clean_and_exit(EXIT_FAILURE);
     }
 
+    // Binding the available socket
     if (bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) != 0) {
         syslog(LOG_ERR, "Error to binding the socket: %m");
         freeaddrinfo(servinfo);
@@ -266,30 +303,39 @@ int main(int argc, char *argv[]) {
     // Initialize the mutex lock
     pthread_mutex_init(&file_mutex, NULL);
 
+    // Intialize the thread with thread timer
+    struct slist_data_s* thread_timer = (struct slist_data_s*) malloc(sizeof(struct slist_data_s));
+    thread_timer->connection = (struct connection_data_s*) malloc(sizeof(struct connection_data_s));
+    thread_timer->connection->is_done = false;
+    pthread_create(&thread_timer->connection->thread_id, NULL, handle_timer, (void *) thread_timer->connection);
+    SLIST_INSERT_HEAD(&head, thread_timer, entries);
+
     // Main loop to accept and handle client connections
     while (1) {
         struct sockaddr_storage their_addr;
         socklen_t addr_size = sizeof(their_addr);
         char ipstr[INET6_ADDRSTRLEN];
 
+        // Waiting to accept new socket
         int accepted_sockfd = accept(sockfd, (struct sockaddr *) &their_addr, &addr_size);
         if (accepted_sockfd == -1) {
             syslog(LOG_ERR, "Error while accept the socket: %m");
             clean_and_exit(EXIT_FAILURE);
         }
 
+        // Calculate the address of accepted client
         const char* client_addr =  inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), ipstr, sizeof ipstr);
 
-
-        // TODO: Create new thread for each accepted socket
+        // Create new thread for each accepted socket and append to list
         struct slist_data_s* thread_item = (struct slist_data_s*) malloc(sizeof(struct slist_data_s));
         thread_item->connection = (struct connection_data_s*) malloc(sizeof(struct connection_data_s));
         thread_item->connection->client_addr = client_addr;
         thread_item->connection->socket_id = accepted_sockfd;
         thread_item->connection->is_done = false;
         pthread_create(&thread_item->connection->thread_id, NULL, handle_client_connection, (void *) thread_item->connection);
-        
         SLIST_INSERT_HEAD(&head, thread_item, entries);
+
+        // Checking if any thread is done then join it and free the memory
         struct slist_data_s *current = SLIST_FIRST(&head);
         struct slist_data_s *prev = NULL;
         while (current != NULL) {
@@ -309,7 +355,6 @@ int main(int argc, char *argv[]) {
             }
             current = next;
         }
-        // handle_client_connection((void*) accepted_sock);
     }
     clean_and_exit(EXIT_SUCCESS);
 }
