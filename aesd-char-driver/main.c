@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
+#include <linux/slab.h> // for kmalloc, kfree, krealloc
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
 int aesd_major =   0; // use dynamic major
@@ -28,14 +29,21 @@ MODULE_LICENSE("Dual BSD/GPL");
 struct aesd_dev aesd_device;
 /* FUNCTION PROTOTYPES */
 void aesd_cleanup_module(void);
+int aesd_init_module(void);
+int aesd_open(struct inode *inode, struct file *filp);
+int aesd_release(struct inode *inode, struct file *filp);
+ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
+                loff_t *f_pos);
+ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
+                loff_t *f_pos);
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
+    struct aesd_dev *dev;
     PDEBUG("open");
     /**
      * TODO: handle open
      */
-    struct aesd_dev *dev;
     dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
     filp->private_data = dev;   /* for other methods */
     return 0;
@@ -53,15 +61,12 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
     struct aesd_buffer_entry *entry;
+    ssize_t retval = 0;
     ssize_t entry_offset = 0;
+    struct aesd_dev *dev = filp->private_data;
 
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle read
-     */
-    struct aesd_dev *dev = filp->private_data;
 
     if (mutex_lock_interruptible(&dev->lock))
 		return -ERESTARTSYS;
@@ -99,19 +104,19 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
+    struct aesd_dev *dev = filp->private_data;
+    char *kbuf;
+    char *new_buff;
+    const char *replaced_entry; 
     
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle write
-     */
-    struct aesd_dev *dev = filp->private_data;
 
     if (mutex_lock_interruptible(&dev->lock)) {
         PDEBUG("mutex lock interrupted");
         return -ERESTARTSYS;
     }
     // Copy the user buffer to kernel space
-    char *kbuf = kmalloc(count+1, GFP_KERNEL);
+    kbuf = kmalloc(count+1, GFP_KERNEL);
     if (copy_from_user(kbuf, buf, count)) {
         PDEBUG("copy_from_user failed");
         mutex_unlock(&dev->lock);
@@ -124,7 +129,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // Append the kbuffer to the current entry
     if (dev->current_entry->buffptr) {
         // If the current entry already has a buffer, we need to reallocate it
-        char *new_buff = krealloc((void *)dev->current_entry->buffptr,
+        new_buff = krealloc((void *)dev->current_entry->buffptr,
                                   dev->current_entry->size + count + 1, GFP_KERNEL);
         if (!new_buff) {
             PDEBUG("krealloc failed");
@@ -154,11 +159,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         PDEBUG("The write command is ended with newline");
         PDEBUG("Writing data: %s\n", kbuf);
         // If it does, we can add the entry to the circular buffer
-        const char *rtnptr = aesd_circular_buffer_add_entry(dev->buffer, dev->current_entry);
-        if (rtnptr) {
-            PDEBUG("Freeing data: %s\n", rtnptr);
+        replaced_entry = aesd_circular_buffer_add_entry(dev->buffer, dev->current_entry);
+        if (replaced_entry) {
+            PDEBUG("Freeing data: %s\n", replaced_entry);
             // If the buffer was full, we need to free the old entry
-            kfree(rtnptr);
+            kfree(replaced_entry);
         }
         // Reset the current entry
         dev->current_entry->buffptr = NULL;
