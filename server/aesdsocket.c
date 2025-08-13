@@ -16,12 +16,20 @@
 #include <sys/queue.h>
 #include <time.h>
 
+#define USE_AESD_CHAR_DEVICE 1
+
 #define MYPORT "9000"
 #define BACKLOG 10
-#define DATA_STREAM "/var/tmp/aesdsocketdata"
 #define MAX_BUFFER_SIZE 100
 #define ELAPSED_TIME 10
 #define TIME_STR_LEN 100
+
+/* Define the data stream path based on the configuration */
+#if USE_AESD_CHAR_DEVICE
+#define DATA_STREAM "/dev/aesdchar"
+#else
+#define DATA_STREAM "/var/tmp/aesdsocketdata"
+#endif
 
 int sockfd = -1;
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -234,7 +242,11 @@ void run_daemon(void) {
 int main(int argc, char *argv[]) {
     // Start logging
     openlog(NULL, 0, LOG_USER);
-    remove(DATA_STREAM);
+
+    // Remove the DATA_STREAM file if it exists
+    #if !USE_AESD_CHAR_DEVICE
+    remove(DATA_STREAM); 
+    #endif
 
     // Set up signal handling
     struct sigaction sa;
@@ -303,12 +315,14 @@ int main(int argc, char *argv[]) {
     // Initialize the mutex lock
     pthread_mutex_init(&file_mutex, NULL);
 
-    // Intialize the thread with thread timer
+    // Intialize the thread with thread timer only if not using the character device
+    #if !USE_AESD_CHAR_DEVICE
     struct slist_data_s* thread_timer = (struct slist_data_s*) malloc(sizeof(struct slist_data_s));
     thread_timer->connection = (struct connection_data_s*) malloc(sizeof(struct connection_data_s));
     thread_timer->connection->is_done = false;
     pthread_create(&thread_timer->connection->thread_id, NULL, handle_timer, (void *) thread_timer->connection);
     SLIST_INSERT_HEAD(&head, thread_timer, entries);
+    #endif
 
     // Main loop to accept and handle client connections
     while (1) {
