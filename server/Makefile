@@ -4,6 +4,10 @@ CFLAGS ?= -g -Wall -Werror
 TARGET ?= aesdsocket
 LDFLAGS ?= -lpthread -lrt
 
+# Include path for aesd_ioctl.h
+INCLUDES = -I../aesd-char-driver
+CFLAGS += $(INCLUDES)
+
 # Default Target
 $(TARGET): aesdsocket.o
 	$(CC) $(CFLAGS) aesdsocket.o -o $(TARGET) $(LDFLAGS)

@@ -15,6 +15,8 @@
 #include <pthread.h>
 #include <sys/queue.h>
 #include <time.h>
+#include <sys/ioctl.h>
+#include "aesd_ioctl.h"
 
 #define USE_AESD_CHAR_DEVICE 1
 
@@ -121,7 +123,8 @@ void * handle_timer(void* thread_params) {
 void * handle_client_connection(void * thread_params) {
     char stream_buf[MAX_BUFFER_SIZE];
     struct connection_data_s * accepted_sock = (struct connection_data_s *) thread_params;
-    
+    int x, y;
+    int ioctl_is_set = 0;
     // Logging accept client connection success
     syslog(LOG_INFO, "Accepted connection from %s\n", accepted_sock->client_addr);
 
@@ -147,7 +150,21 @@ void * handle_client_connection(void * thread_params) {
 
         // Write data to DATA_STREAM and add to the end of buffer null character
         stream_buf[numbytes] = '\0';
-        fputs(stream_buf, fptr);
+        // Check if the string sent over socket equals AESDCHAR_IOCSEEKTO:X,Y
+        int chars_consumed = 0;
+        if (sscanf(stream_buf, "AESDCHAR_IOCSEEKTO:%d,%d%n", &x, &y, &chars_consumed) == 2) {
+            // Check what comes after the parsed part
+            char *remaining = stream_buf + chars_consumed;
+
+            if (*remaining == '\0' || *remaining == '\n') {
+                ioctl_is_set = 1;
+            } else {
+                fputs(stream_buf, fptr);
+            }
+        } else {
+            fputs(stream_buf, fptr);
+        }
+        
 
         // New line character detected that inform the end of packet
         if (stream_buf[numbytes-1] =='\n') break;
@@ -157,6 +174,22 @@ void * handle_client_connection(void * thread_params) {
     // Returns the full content of DATA_STREAM to the client as soon as
     // client complete sending packets
     fptr = fopen(DATA_STREAM, "r");
+    // If ioctl command is sent to the socket
+    if (ioctl_is_set) {
+        int fd = fileno(fptr);
+            
+        struct aesd_seekto seekto = {
+            .write_cmd = x,
+            .write_cmd_offset = y
+        };
+
+        int result = ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+        if (result < 0) {
+            syslog(LOG_ERR, "IOCTL AESDCHAR_IOCSEEKTO failed: %m");
+        } else {
+            syslog(LOG_INFO, "IOCTL seek to cmd:%d, offset:%d successful", x, y);
+        }
+    }
     while((fgets(stream_buf, MAX_BUFFER_SIZE, fptr) !=  NULL) && (!stop_threads)) {
         if (send(accepted_sock->socket_id, stream_buf, strlen(stream_buf), 0) == -1) {
             syslog(LOG_ERR, "Error while sending data");
