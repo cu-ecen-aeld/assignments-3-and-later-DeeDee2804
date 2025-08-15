@@ -23,6 +23,16 @@
 #  define PDEBUG(fmt, args...) /* not debugging: nothing */
 #endif
 
+extern void aesd_cleanup_module(void);
+extern int aesd_init_module(void);
+extern int aesd_open(struct inode *inode, struct file *filp);
+extern int aesd_release(struct inode *inode, struct file *filp);
+extern ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
+                loff_t *f_pos);
+extern ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
+                loff_t *f_pos);
+extern loff_t aesd_llseek(struct file *filp, loff_t offset, int whence);
+extern long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 struct aesd_dev
 {
     /**
@@ -32,6 +42,7 @@ struct aesd_dev
     struct aesd_circular_buffer *buffer;          /* Circular buffer for device */
     struct aesd_buffer_entry  *current_entry;     /* Current entry buffer before \n */
     struct mutex lock;                            /* Mutual exclusive semaphore */
+    unsigned long size;                           /* Size of the device buffer */
 };
 
 

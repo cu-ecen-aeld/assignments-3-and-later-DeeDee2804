@@ -57,16 +57,18 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 * @return NULL or, if an existing entry at out_offs was replaced,
-*         the value of buffptr for the entry which was replaced (for use with dynamic memory allocation/free)
+*         the replaced entry will be returned (for use with dynamic memory allocation/free)
 */
-const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+struct aesd_buffer_entry aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    const char* rtnptr;
+    struct aesd_buffer_entry replaced_entry;
     // Check if the buffer is full then return the replaced entry
     if (buffer->full) {
-        rtnptr = buffer->entry[buffer->in_offs].buffptr;
+        replaced_entry.buffptr = buffer->entry[buffer->in_offs].buffptr;
+        replaced_entry.size = buffer->entry[buffer->in_offs].size;
     } else {
-        rtnptr = NULL;
+        replaced_entry.buffptr = NULL;
+        replaced_entry.size = 0;
     }
     // Add new entry into current in offset
     buffer->entry[buffer->in_offs] = *add_entry;
@@ -80,7 +82,7 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
         if (buffer->in_offs == buffer->out_offs) buffer->full = true;
     }
 
-    return rtnptr;
+    return replaced_entry;
 }
 
 /**

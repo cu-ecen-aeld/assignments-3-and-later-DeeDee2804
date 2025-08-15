@@ -18,8 +18,10 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include <linux/slab.h> // for kmalloc, kfree, krealloc
+#include <linux/uaccess.h>	/* copy_*_user */
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -27,15 +29,6 @@ MODULE_AUTHOR("DeeDee2804"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
-/* FUNCTION PROTOTYPES */
-void aesd_cleanup_module(void);
-int aesd_init_module(void);
-int aesd_open(struct inode *inode, struct file *filp);
-int aesd_release(struct inode *inode, struct file *filp);
-ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
-                loff_t *f_pos);
-ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
-                loff_t *f_pos);
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
@@ -107,7 +100,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     struct aesd_dev *dev = filp->private_data;
     char *kbuf;
     char *new_buff;
-    const char *replaced_entry; 
+    struct aesd_buffer_entry replaced_entry; 
     
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
 
@@ -160,11 +153,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         PDEBUG("Writing data: %s\n", kbuf);
         // If it does, we can add the entry to the circular buffer
         replaced_entry = aesd_circular_buffer_add_entry(dev->buffer, dev->current_entry);
-        if (replaced_entry) {
-            PDEBUG("Freeing data: %s\n", replaced_entry);
+        if (replaced_entry.buffptr) {
+            PDEBUG("Freeing data: %s\n", replaced_entry.buffptr);
+            // Substract the total size of device buffer
+            dev->size -= replaced_entry.size;
             // If the buffer was full, we need to free the old entry
-            kfree(replaced_entry);
+            kfree(replaced_entry.buffptr);
         }
+        // Increase the total size of device buffer
+        dev->size += dev->current_entry->size;
         // Reset the current entry
         dev->current_entry->buffptr = NULL;
         dev->current_entry->size = 0;
@@ -181,11 +178,117 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     kfree(kbuf);
     return retval;
 }
+
+loff_t aesd_llseek(struct file *filp, loff_t off, int whence) {
+    struct aesd_dev *dev = filp->private_data;
+    loff_t newpos;
+
+    switch(whence) {
+        case SEEK_SET:
+            newpos = off;
+            break;
+        case SEEK_CUR:
+            newpos = filp->f_pos + off;
+            break;
+        case SEEK_END:
+            newpos = dev->size + off;
+            break;
+        default:
+            return -EINVAL;
+    }
+
+    if (newpos < 0) {
+        return -EINVAL;
+    }
+
+    filp->f_pos = newpos;
+    return newpos;
+}
+
+static int aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t write_cmd_offset) {
+    struct aesd_dev *dev = filp->private_data;
+    int index, entry_index;
+    size_t cur_offset = 0;
+    int retval = 0;
+
+    // Lock the device
+    if (mutex_lock_interruptible(&dev->lock)) {
+        retval = -ERESTARTSYS;
+        return retval;
+    }
+
+    // Find the entry in the circular buffer
+    for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++) {
+        entry_index = (dev->buffer->out_offs + index) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
+        // Check if the end of buffer is reached in case buffer is not full
+        if (!dev->buffer->full && entry_index == dev->buffer->in_offs) {
+            retval = -EINVAL; // No such entry
+            goto fail;
+        }
+
+        // If the offset number is reached in current entry
+        if (write_cmd == entry_index) {
+            break;
+        }
+        cur_offset += dev->buffer->entry[entry_index].size;
+    }
+
+    // If enough data is written
+    if (index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
+        if (write_cmd_offset < dev->buffer->entry[entry_index].size) {
+            cur_offset += write_cmd_offset;
+            filp->f_pos = cur_offset;
+        } else {
+            retval = -EINVAL; // Invalid offset
+            goto fail;
+        }
+    } else {
+        retval = -EINVAL; // Invalid command
+        goto fail;
+    }
+
+  fail:
+    // Unlock the device
+    mutex_unlock(&dev->lock);
+    return retval;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+    int retval = 0;
+    struct aesd_seekto seekto;
+
+    // Check if the command is valid for this device
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) {
+        return -ENOTTY; 
+    }
+    if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) {
+        return -ENOTTY; 
+    }
+
+    switch (cmd) {
+        case AESDCHAR_IOCSEEKTO:
+            // Copy the seekto structure from user space
+            if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto))) {
+                retval = -EFAULT;
+            } else {
+                PDEBUG("IOCTL seek to entry %u, offset %u", seekto.write_cmd, seekto.write_cmd_offset);
+                retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            }
+            break;
+        default:
+            retval = -ENOTTY;
+    }
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
+    .llseek =   aesd_llseek,
+    .unlocked_ioctl =    aesd_ioctl,
     .release =  aesd_release,
 };
 
