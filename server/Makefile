@@ -6,13 +6,12 @@ LDFLAGS ?= -lpthread -lrt
 
 # Include path for aesd_ioctl.h
 INCLUDES = -I../aesd-char-driver
-CFLAGS += $(INCLUDES)
 
 # Default Target
 $(TARGET): aesdsocket.o
-	$(CC) $(CFLAGS) aesdsocket.o -o $(TARGET) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(INCLUDES) aesdsocket.o -o $(TARGET) $(LDFLAGS)
 aesdsocket.o: aesdsocket.c
-	$(CC) $(CFLAGS) -c aesdsocket.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c aesdsocket.c
 
 all: $(TARGET)
 
